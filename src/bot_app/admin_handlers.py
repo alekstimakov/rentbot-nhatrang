@@ -13,6 +13,13 @@ def _status_title(status_code: str) -> str | None:
     }.get(status_code)
 
 
+def _availability_stats_text() -> str:
+    scooters = bot_db.list_scooters()
+    total = len(scooters)
+    available = sum(1 for scooter in scooters if bool(int(scooter.get("is_available", 1))))
+    return f"Доступно {available} из {total}"
+
+
 def _booking_actions_markup(booking: dict[str, str | int], status_code: str):
     if status_code not in {"pending", "active"}:
         return None
@@ -52,6 +59,18 @@ async def on_bookings_button(message: Message) -> None:
     await message.answer(
         "Меню управления бронями:",
         reply_markup=rt.admin_booking_status_menu_keyboard(),
+    )
+
+
+async def on_availability_button(message: Message) -> None:
+    if not message.from_user or not rt.is_admin(message.from_user.id):
+        await message.answer("Команда доступна только администратору.")
+        return
+    await message.answer(
+        "Управление доступностью байков:\n"
+        "Нажимайте на модели, чтобы включать/выключать их для клиентов.\n"
+        f"{_availability_stats_text()}",
+        reply_markup=rt.admin_availability_keyboard(),
     )
 
 
@@ -214,6 +233,52 @@ async def on_admin_db_wipe_request(callback: CallbackQuery) -> None:
         reply_markup=rt.admin_wipe_confirm_keyboard(),
     )
     await callback.answer()
+
+
+async def on_admin_availability(callback: CallbackQuery) -> None:
+    if not callback.from_user or not rt.is_admin(callback.from_user.id):
+        await callback.answer("Только для администратора", show_alert=True)
+        return
+    assert callback.data is not None
+    parts = callback.data.split(":")
+    if len(parts) < 2:
+        await callback.answer("Некорректная команда", show_alert=True)
+        return
+    action = parts[1]
+
+    if action == "open":
+        await callback.message.answer(
+            "Управление доступностью байков:\n"
+            "Нажимайте на модели, чтобы включать/выключать их для клиентов.\n"
+            f"{_availability_stats_text()}",
+            reply_markup=rt.admin_availability_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    if action == "done":
+        await callback.message.answer(
+            "Панель администратора. Выберите действие:",
+            reply_markup=rt.admin_main_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    if action == "toggle":
+        if len(parts) != 3 or not parts[2].isdigit():
+            await callback.answer("Некорректный ID", show_alert=True)
+            return
+        scooter_id = int(parts[2])
+        new_state = bot_db.toggle_scooter_availability(scooter_id)
+        if new_state is None:
+            await callback.answer("Модель не найдена", show_alert=True)
+            return
+        if callback.message:
+            await callback.message.edit_reply_markup(reply_markup=rt.admin_availability_keyboard())
+        await callback.answer(f"Доступность обновлена. {_availability_stats_text()}")
+        return
+
+    await callback.answer("Неизвестная команда", show_alert=True)
 
 
 async def on_admin_booking_wipe(callback: CallbackQuery) -> None:

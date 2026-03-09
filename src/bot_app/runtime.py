@@ -45,6 +45,7 @@ CATEGORIES: dict[str, str] = {
     "city": "🏙 Городской скутер",
     "travel": "🛵 Комфортный для города и поездок",
     "light": "🏍 Легкий мотоцикл",
+    "no_license": "🪪 Без прав",
 }
 
 START_TEXT = (
@@ -140,7 +141,7 @@ def parse_start_date(rental_date_raw: str) -> datetime | None:
 
 
 def scooters_keyboard(category_code: str):
-    category_scooters = bot_db.list_scooters(category_code)
+    category_scooters = bot_db.list_scooters(category_code, only_available=True)
     scooter_items = [(int(scooter["id"]), make_scooter_title(scooter)) for scooter in category_scooters]
     return keyboards.scooters_keyboard(scooter_items)
 
@@ -168,6 +169,18 @@ def admin_booking_wipe_confirm_keyboard():
 def admin_delete_keyboard():
     scooters = [(int(scooter["id"]), make_scooter_title(scooter)) for scooter in bot_db.list_scooters()]
     return keyboards.admin_delete_keyboard(scooters)
+
+
+def admin_availability_keyboard():
+    scooters = [
+        (
+            int(scooter["id"]),
+            make_scooter_title(scooter),
+            bool(int(scooter.get("is_available", 1))),
+        )
+        for scooter in bot_db.list_scooters()
+    ]
+    return keyboards.admin_availability_keyboard(scooters)
 
 
 def scooter_actions_keyboard(scooter_id: int, category_code: str):
@@ -344,6 +357,7 @@ async def send_rules_and_contract(message: Message) -> None:
 
 async def show_main_menu(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else None
+    is_admin_user = bool(user_id and is_admin(user_id))
     start_photo_path = os.getenv("START_PHOTO_PATH", "").strip()
     start_photo_url = os.getenv("START_PHOTO_URL", "").strip()
 
@@ -361,7 +375,8 @@ async def show_main_menu(message: Message) -> None:
         )
     else:
         await message.answer(START_TEXT, reply_markup=main_reply_keyboard(user_id))
-    await message.answer("Нажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории.")
+    if not is_admin_user:
+        await message.answer("Нажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории.")
 
 
 @router.message(CommandStart())
@@ -404,6 +419,13 @@ async def on_admin_button(message: Message) -> None:
 )
 async def on_bookings_button(message: Message) -> None:
     await _admin_handlers().on_bookings_button(message)
+
+
+@router.message(
+    lambda m: (m.text or "").strip().lower() in {"управление доступностью", "доступность"}
+)
+async def on_availability_button(message: Message) -> None:
+    await _admin_handlers().on_availability_button(message)
 
 
 @router.message(lambda m: (m.text or "").strip().lower() in {"sos", "🔴 sos"})
@@ -459,6 +481,11 @@ async def on_admin_contract_set(callback: CallbackQuery) -> None:
 @router.callback_query(lambda c: c.data == "admin_db:wipe")
 async def on_admin_db_wipe_request(callback: CallbackQuery) -> None:
     await _admin_handlers().on_admin_db_wipe_request(callback)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("admin_availability:"))
+async def on_admin_availability(callback: CallbackQuery) -> None:
+    await _admin_handlers().on_admin_availability(callback)
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("admin_booking_wipe:"))

@@ -23,7 +23,8 @@ def init_db() -> None:
                 text TEXT NOT NULL DEFAULT '',
                 caption TEXT NOT NULL DEFAULT '',
                 photo_file_id TEXT NOT NULL DEFAULT '',
-                title TEXT NOT NULL
+                title TEXT NOT NULL,
+                is_available INTEGER NOT NULL DEFAULT 1
             )
             """
         )
@@ -70,16 +71,36 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE bookings ADD COLUMN reminder_admin_sent INTEGER NOT NULL DEFAULT 0"
             )
+        scooter_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(scooters)").fetchall()
+        }
+        if "is_available" not in scooter_columns:
+            conn.execute(
+                "ALTER TABLE scooters ADD COLUMN is_available INTEGER NOT NULL DEFAULT 1"
+            )
         conn.execute("UPDATE bookings SET status = 'active' WHERE status = 'approved'")
         conn.commit()
 
 
-def list_scooters(category_code: str | None = None) -> list[dict[str, str | int]]:
+def list_scooters(
+    category_code: str | None = None,
+    *,
+    only_available: bool = False,
+) -> list[dict[str, str | int]]:
     with get_connection() as conn:
-        if category_code:
+        if category_code and only_available:
+            rows = conn.execute(
+                "SELECT * FROM scooters WHERE category = ? AND is_available = 1 ORDER BY id",
+                (category_code,),
+            ).fetchall()
+        elif category_code:
             rows = conn.execute(
                 "SELECT * FROM scooters WHERE category = ? ORDER BY id",
                 (category_code,),
+            ).fetchall()
+        elif only_available:
+            rows = conn.execute(
+                "SELECT * FROM scooters WHERE is_available = 1 ORDER BY id"
             ).fetchall()
         else:
             rows = conn.execute("SELECT * FROM scooters ORDER BY id").fetchall()
@@ -98,8 +119,8 @@ def add_scooter(model: dict[str, str | int]) -> int:
     with get_connection() as conn:
         cursor = conn.execute(
             """
-            INSERT INTO scooters (category, msg_type, text, caption, photo_file_id, title)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO scooters (category, msg_type, text, caption, photo_file_id, title, is_available)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(model["category"]),
@@ -108,6 +129,7 @@ def add_scooter(model: dict[str, str | int]) -> int:
                 str(model["caption"]),
                 str(model["photo_file_id"]),
                 str(model["title"]),
+                int(model.get("is_available", 1)),
             ),
         )
         conn.commit()
@@ -119,6 +141,26 @@ def delete_scooter(scooter_id: int) -> bool:
         cursor = conn.execute("DELETE FROM scooters WHERE id = ?", (scooter_id,))
         conn.commit()
         return cursor.rowcount > 0
+
+
+def set_scooter_availability(scooter_id: int, is_available: bool) -> bool:
+    with get_connection() as conn:
+        cursor = conn.execute(
+            "UPDATE scooters SET is_available = ? WHERE id = ?",
+            (1 if is_available else 0, scooter_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def toggle_scooter_availability(scooter_id: int) -> bool | None:
+    scooter = get_scooter_by_id(scooter_id)
+    if not scooter:
+        return None
+    current = bool(int(scooter.get("is_available", 1)))
+    new_state = not current
+    ok = set_scooter_availability(scooter_id, new_state)
+    return new_state if ok else None
 
 
 def set_setting(key: str, value: str) -> None:

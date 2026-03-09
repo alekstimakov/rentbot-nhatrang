@@ -11,7 +11,8 @@ async def on_start(message: Message) -> None:
 async def on_menu_button(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else None
     await message.answer("Главное меню", reply_markup=rt.main_reply_keyboard(user_id))
-    await message.answer("Нажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории.")
+    if not (user_id and rt.is_admin(user_id)):
+        await message.answer("Нажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории.")
 
 
 async def on_choose_bike_button(message: Message) -> None:
@@ -208,7 +209,7 @@ async def on_category_selected(callback: CallbackQuery) -> None:
         await callback.answer("Unknown category", show_alert=True)
         return
 
-    if not bot_db.list_scooters(category_code):
+    if not bot_db.list_scooters(category_code, only_available=True):
         await callback.message.edit_text(
             f"Категория: {category_title}\nПока нет доступных моделей.",
             reply_markup=rt.scooters_keyboard(category_code),
@@ -240,6 +241,9 @@ async def on_scooter_selected(callback: CallbackQuery) -> None:
     scooter = bot_db.get_scooter_by_id(int(scooter_id))
     if not scooter:
         await callback.answer("Scooter not found", show_alert=True)
+        return
+    if not bool(int(scooter.get("is_available", 1))):
+        await callback.answer("Эта модель сейчас недоступна.", show_alert=True)
         return
 
     msg_type = scooter.get("msg_type")
@@ -283,6 +287,9 @@ async def on_book_clicked(callback: CallbackQuery) -> None:
     scooter = bot_db.get_scooter_by_id(int(scooter_id)) if scooter_id.isdigit() else None
     if not scooter:
         await callback.answer("Модель не найдена", show_alert=True)
+        return
+    if not bool(int(scooter.get("is_available", 1))):
+        await callback.answer("Эта модель сейчас недоступна для брони.", show_alert=True)
         return
 
     if not callback.from_user:

@@ -15,8 +15,8 @@ def categories_keyboard(categories: Mapping[str, str]):
 def main_reply_keyboard(*, is_admin_user: bool, has_active_booking: bool) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [[KeyboardButton(text="Меню")]]
     if is_admin_user:
-        rows.append([KeyboardButton(text="🧾 Мои заявки")])
         rows.append([KeyboardButton(text="Админ"), KeyboardButton(text="Управление бронями")])
+        rows.append([KeyboardButton(text="Управление доступностью")])
     else:
         rows.append([KeyboardButton(text="🛵 Выбрать байк")])
         rows.append([KeyboardButton(text="📋 Правила бронирования")])
@@ -88,7 +88,9 @@ def admin_main_keyboard():
     builder.button(text="➕ Городской скутер", callback_data="admin_add:city")
     builder.button(text="➕ Комфортный скутер", callback_data="admin_add:travel")
     builder.button(text="➕ Легкий мотоцикл", callback_data="admin_add:light")
+    builder.button(text="➕ Без прав", callback_data="admin_add:no_license")
     builder.button(text="🗑 Удалить модель", callback_data="admin_del:list")
+    builder.button(text="📦 Доступность байков", callback_data="admin_availability:open")
     builder.button(text="📍 Адрес офиса", callback_data="admin_office:set")
     builder.button(text="📋 Правила бронирования", callback_data="admin_rules:set")
     builder.button(text="🛵 Советы по вождению", callback_data="admin_info:set_tips")
@@ -231,5 +233,18 @@ def admin_reject_reasons_keyboard(booking_id: int):
         text="✍️ Другая причина",
         callback_data=f"admin_booking_reject:{booking_id}:other",
     )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def admin_availability_keyboard(scooters: Sequence[tuple[int, str, bool]]):
+    builder = InlineKeyboardBuilder()
+    for scooter_id, title, is_available in scooters:
+        prefix = "✅" if is_available else "⬜"
+        builder.button(
+            text=f"{prefix} {title}",
+            callback_data=f"admin_availability:toggle:{scooter_id}",
+        )
+    builder.button(text="🏠 В админ-панель", callback_data="admin_availability:done")
     builder.adjust(1)
     return builder.as_markup()
