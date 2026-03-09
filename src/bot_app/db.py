@@ -7,8 +7,11 @@ def get_db_path() -> str:
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(get_db_path())
+    conn = sqlite3.connect(get_db_path(), timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=10000")
     return conn
 
 
@@ -54,6 +57,24 @@ def init_db() -> None:
                 reminder_admin_sent INTEGER NOT NULL DEFAULT 0,
                 rejection_reason TEXT NOT NULL DEFAULT ''
             )
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_scooters_category_available
+            ON scooters(category, is_available, id)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_bookings_user_status_id
+            ON bookings(user_id, status, id DESC)
+            """
+        )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_bookings_status_id
+            ON bookings(status, id DESC)
             """
         )
         columns = {

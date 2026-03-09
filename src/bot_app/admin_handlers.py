@@ -1,4 +1,5 @@
 from aiogram.types import CallbackQuery, Message
+from aiogram.exceptions import TelegramBadRequest
 
 from bot_app import db as bot_db
 from bot_app import runtime as rt
@@ -11,6 +12,21 @@ def _status_title(status_code: str) -> str | None:
         "rejected": "отклонена",
         "finished": "отъездила",
     }.get(status_code)
+
+
+async def _safe_callback_answer(
+    callback: CallbackQuery,
+    text: str | None = None,
+    *,
+    show_alert: bool = False,
+) -> None:
+    try:
+        await callback.answer(text, show_alert=show_alert)
+    except TelegramBadRequest as exc:
+        msg = str(exc).lower()
+        if "query is too old" in msg or "query id is invalid" in msg:
+            return
+        raise
 
 
 def _availability_stats_text() -> str:
@@ -271,14 +287,14 @@ async def on_admin_availability(callback: CallbackQuery) -> None:
         scooter_id = int(parts[2])
         new_state = bot_db.toggle_scooter_availability(scooter_id)
         if new_state is None:
-            await callback.answer("Модель не найдена", show_alert=True)
+            await _safe_callback_answer(callback, "Модель не найдена", show_alert=True)
             return
+        await _safe_callback_answer(callback, f"Доступность обновлена. {_availability_stats_text()}")
         if callback.message:
             await callback.message.edit_reply_markup(reply_markup=rt.admin_availability_keyboard())
-        await callback.answer(f"Доступность обновлена. {_availability_stats_text()}")
         return
 
-    await callback.answer("Неизвестная команда", show_alert=True)
+    await _safe_callback_answer(callback, "Неизвестная команда", show_alert=True)
 
 
 async def on_admin_booking_wipe(callback: CallbackQuery) -> None:
@@ -364,6 +380,7 @@ async def on_admin_booking_action(callback: CallbackQuery) -> None:
         if str(booking.get("status")) != "pending":
             await callback.answer("Заявка уже обработана", show_alert=True)
             return
+        await _safe_callback_answer(callback)
         bot_db.set_booking_status(booking_id, "active")
         await callback.message.answer(f"Заявка #{booking_id} подтверждена. Статус: активна.")
         try:
@@ -377,13 +394,13 @@ async def on_admin_booking_action(callback: CallbackQuery) -> None:
             )
         except Exception:
             pass
-        await callback.answer()
         return
 
     if action == "finish":
         if str(booking.get("status")) != "active":
             await callback.answer("Заявка уже обработана", show_alert=True)
             return
+        await _safe_callback_answer(callback)
         bot_db.set_booking_status(booking_id, "finished")
         await callback.message.answer(f"Заявка #{booking_id} отмечена как отъездила.")
         try:
@@ -393,7 +410,6 @@ async def on_admin_booking_action(callback: CallbackQuery) -> None:
             )
         except Exception:
             pass
-        await callback.answer()
         return
 
     if action == "message":
@@ -481,19 +497,19 @@ async def on_admin_booking_state(callback: CallbackQuery) -> None:
         return
     assert callback.data is not None
     state_code = callback.data.split(":", 1)[1]
+    # Ack early because this handler may send many messages.
+    await _safe_callback_answer(callback)
     if state_code == "menu":
         await callback.message.answer(
             "Меню управления бронями:",
             reply_markup=rt.admin_booking_status_menu_keyboard(),
         )
-        await callback.answer()
         return
     if state_code == "back":
         await callback.message.answer(
             "Панель администратора. Выберите действие:",
             reply_markup=rt.admin_main_keyboard(),
         )
-        await callback.answer()
         return
     if state_code == "cleanup":
         deleted = bot_db.delete_bookings_by_statuses(["rejected", "finished"])
@@ -501,7 +517,6 @@ async def on_admin_booking_state(callback: CallbackQuery) -> None:
             f"Удалено броней: {deleted}\n"
             "Очищены статусы: отклонена и отъездила."
         )
-        await callback.answer()
         return
     if state_code in {"pending", "active", "finished"}:
         bookings = bot_db.list_bookings_by_status(state_code)
@@ -509,62 +524,58 @@ async def on_admin_booking_state(callback: CallbackQuery) -> None:
         total_count = len(bookings)
         if total_count == 0:
             await callback.message.answer(f"Броней со статусом '{status_title}' нет.")
-            await callback.answer()
             return
         if total_count > 5:
             await callback.message.answer(
                 "Выберите режим отображения:",
                 reply_markup=rt.admin_booking_view_mode_keyboard(state_code, total_count),
             )
-            await callback.answer()
             return
 
         await callback.message.answer(
             f"Статус '{status_title}', все ({total_count}):"
         )
         await _send_booking_list(callback, bookings, state_code)
-        await callback.answer()
         return
 
     status_title = _status_title(state_code)
     if not status_title:
-        await callback.answer("Неизвестный статус", show_alert=True)
+        await _safe_callback_answer(callback, "Неизвестный статус", show_alert=True)
         return
 
     bookings = bot_db.list_bookings_by_status(state_code)
     if not bookings:
         await callback.message.answer(f"Броней со статусом '{status_title}' нет.")
-        await callback.answer()
         return
 
     await callback.message.answer(f"Брони со статусом '{status_title}': {len(bookings)}")
     await _send_booking_list(callback, bookings, state_code)
-    await callback.answer()
 
 
 async def on_admin_booking_view(callback: CallbackQuery) -> None:
     if not callback.from_user or not rt.is_admin(callback.from_user.id):
         await callback.answer("Только для администратора", show_alert=True)
         return
+    # Ack early because this handler may send many messages.
+    await _safe_callback_answer(callback)
     assert callback.data is not None
     parts = callback.data.split(":")
     if len(parts) != 3:
-        await callback.answer("Некорректная команда", show_alert=True)
+        await _safe_callback_answer(callback, "Некорректная команда", show_alert=True)
         return
     status_code, view_mode = parts[1], parts[2]
     if status_code not in {"pending", "active", "finished"}:
-        await callback.answer("Неизвестный статус", show_alert=True)
+        await _safe_callback_answer(callback, "Неизвестный статус", show_alert=True)
         return
     limit = 5 if view_mode == "last5" else None
     if view_mode not in {"last5", "all"}:
-        await callback.answer("Неизвестный режим", show_alert=True)
+        await _safe_callback_answer(callback, "Неизвестный режим", show_alert=True)
         return
 
     status_title = _status_title(status_code) or status_code
     bookings = bot_db.list_bookings_by_status(status_code, limit=limit)
     if not bookings:
         await callback.message.answer(f"Броней со статусом '{status_title}' нет.")
-        await callback.answer()
         return
 
     prefix = "последние 5" if limit == 5 else "все"
@@ -572,4 +583,3 @@ async def on_admin_booking_view(callback: CallbackQuery) -> None:
         f"Статус '{status_title}', {prefix}: {len(bookings)}"
     )
     await _send_booking_list(callback, bookings, status_code)
-    await callback.answer()
