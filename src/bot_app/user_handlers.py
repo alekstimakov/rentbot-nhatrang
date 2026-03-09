@@ -1,4 +1,6 @@
-﻿from aiogram.exceptions import TelegramBadRequest
+﻿import asyncio
+
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.types import CallbackQuery, Message
 
 from bot_app import db as bot_db
@@ -18,6 +20,18 @@ async def _safe_callback_answer(
         if "query is too old" in msg or "query id is invalid" in msg:
             return
         raise
+
+async def _safe_message_send(sender, *args, **kwargs) -> bool:
+    for attempt in range(3):
+        try:
+            await sender(*args, **kwargs)
+            return True
+        except TelegramNetworkError:
+            if attempt == 2:
+                return False
+            await asyncio.sleep(0.7 * (attempt + 1))
+    return False
+
 
 async def on_start(message: Message) -> None:
     await rt.show_main_menu(message)
@@ -121,13 +135,13 @@ async def on_info_selected(callback: CallbackQuery) -> None:
         text = bot_db.get_setting("info_tips_text").strip()
         video_file_id = bot_db.get_setting("info_tips_video_file_id").strip()
         if not text and not video_file_id:
-            await callback.message.answer("Гайд по вождению пока не добавлен. Обратитесь к менеджеру.")
+            await _safe_message_send(callback.message.answer, "Гайд по вождению пока не добавлен. Обратитесь к менеджеру.")
             await _safe_callback_answer(callback)
             return
         if text:
-            await callback.message.answer(f"🛵 Гайд по вождению:\n{text}")
+            await _safe_message_send(callback.message.answer, f"🛵 Гайд по вождению:\n{text}")
         if video_file_id:
-            await callback.message.answer_video(video=video_file_id)
+            await _safe_message_send(callback.message.answer_video, video=video_file_id)
         await _safe_callback_answer(callback)
         return
 
@@ -135,13 +149,13 @@ async def on_info_selected(callback: CallbackQuery) -> None:
         text = bot_db.get_setting("info_guide_text").strip()
         document_file_id = bot_db.get_setting("info_guide_document_file_id").strip()
         if not text and not document_file_id:
-            await callback.message.answer("Путеводитель пока не добавлен. Обратитесь к менеджеру.")
+            await _safe_message_send(callback.message.answer, "Путеводитель пока не добавлен. Обратитесь к менеджеру.")
             await _safe_callback_answer(callback)
             return
         if text:
-            await callback.message.answer(f"🗺️ Путеводитель:\n{text}")
+            await _safe_message_send(callback.message.answer, f"🗺️ Путеводитель:\n{text}")
         if document_file_id:
-            await callback.message.answer_document(document=document_file_id)
+            await _safe_message_send(callback.message.answer_document, document=document_file_id)
         await _safe_callback_answer(callback)
         return
 
@@ -181,7 +195,7 @@ async def on_sos_selected(callback: CallbackQuery) -> None:
         "reason_title": reason,
         "user_link": link_display,
     }
-    await callback.message.answer(
+    await _safe_message_send(callback.message.answer, 
         "Отправьте вашу текущую геолокацию.",
         reply_markup=rt.sos_location_keyboard(callback.from_user.id),
     )
@@ -193,10 +207,10 @@ async def on_user_booking_list(callback: CallbackQuery) -> None:
         return
     bookings = bot_db.list_user_bookings(callback.from_user.id)
     if not bookings:
-        await callback.message.answer("У вас пока нет активных или одобренных заявок.")
+        await _safe_message_send(callback.message.answer, "У вас пока нет активных или одобренных заявок.")
         await _safe_callback_answer(callback)
         return
-    await callback.message.answer(rt.user_bookings_text(bookings))
+    await _safe_message_send(callback.message.answer, rt.user_bookings_text(bookings))
     await _safe_callback_answer(callback)
 
 
@@ -205,14 +219,14 @@ async def on_user_manager_contact(callback: CallbackQuery) -> None:
         return
     active_booking = bot_db.get_latest_active_booking(callback.from_user.id)
     if not active_booking:
-        await callback.message.answer("Активной заявки нет. Кнопка доступна только при активной заявке.")
+        await _safe_message_send(callback.message.answer, "Активной заявки нет. Кнопка доступна только при активной заявке.")
         await _safe_callback_answer(callback)
         return
     rt.USER_MANAGER_FLOW[callback.from_user.id] = {
         "stage": "await_manager_message",
         "booking_id": int(active_booking["id"]),
     }
-    await callback.message.answer("Напишите сообщение менеджеру по вашей заявке.")
+    await _safe_message_send(callback.message.answer, "Напишите сообщение менеджеру по вашей заявке.")
     await _safe_callback_answer(callback)
 
 
@@ -225,14 +239,14 @@ async def on_category_selected(callback: CallbackQuery) -> None:
         return
 
     if not bot_db.list_scooters(category_code, only_available=True):
-        await callback.message.edit_text(
+        await _safe_message_send(callback.message.edit_text, 
             f"Категория: {category_title}\nПока нет доступных моделей.",
             reply_markup=rt.scooters_keyboard(category_code),
         )
         await _safe_callback_answer(callback)
         return
 
-    await callback.message.edit_text(
+    await _safe_message_send(callback.message.edit_text, 
         f"Категория: {category_title}\nВыберите модель:",
         reply_markup=rt.scooters_keyboard(category_code),
     )
@@ -240,7 +254,7 @@ async def on_category_selected(callback: CallbackQuery) -> None:
 
 
 async def on_back_to_categories(callback: CallbackQuery) -> None:
-    await callback.message.edit_text(
+    await _safe_message_send(callback.message.edit_text, 
         "Выберите категорию скутера:",
         reply_markup=rt.categories_keyboard(callback.from_user.id if callback.from_user else None),
     )
@@ -267,15 +281,15 @@ async def on_scooter_selected(callback: CallbackQuery) -> None:
     photo_file_id = str(scooter.get("photo_file_id", ""))
 
     if msg_type == "photo" and photo_file_id:
-        await callback.message.answer_photo(photo=photo_file_id, caption=caption or None)
+        await _safe_message_send(callback.message.answer_photo, photo=photo_file_id, caption=caption or None)
     elif text:
-        await callback.message.answer(text)
+        await _safe_message_send(callback.message.answer, text)
     elif caption:
-        await callback.message.answer(caption)
+        await _safe_message_send(callback.message.answer, caption)
     else:
-        await callback.message.answer("Карточка модели пуста.")
+        await _safe_message_send(callback.message.answer, "Карточка модели пуста.")
 
-    await callback.message.answer(
+    await _safe_message_send(callback.message.answer, 
         "Что дальше?",
         reply_markup=rt.scooter_actions_keyboard(
             scooter_id=int(scooter["id"]),
@@ -289,7 +303,7 @@ async def on_more_bikes(callback: CallbackQuery) -> None:
     assert callback.data is not None
     category_code = callback.data.split(":", 1)[1]
     category_title = rt.CATEGORIES.get(category_code, category_code)
-    await callback.message.answer(
+    await _safe_message_send(callback.message.answer, 
         f"Категория: {category_title}\nВыберите модель:",
         reply_markup=rt.scooters_keyboard(category_code),
     )
@@ -314,7 +328,7 @@ async def on_book_clicked(callback: CallbackQuery) -> None:
         "scooter_id": int(scooter_id),
     }
 
-    await callback.message.answer(
+    await _safe_message_send(callback.message.answer, 
         "Хорошо. Напишите свои даты аренды.\n"
         "Пример: с 12.03 по 18.03",
     )
@@ -340,19 +354,19 @@ async def on_delivery_selected(callback: CallbackQuery) -> None:
         office_link = bot_db.get_setting("office_link").strip()
         if office_link:
             state["office_link"] = office_link
-        await callback.message.answer(
+        await _safe_message_send(callback.message.answer, 
             rt.booking_summary_text(callback.from_user, state, scooter_name),
             reply_markup=rt.booking_confirm_keyboard(),
         )
         if not office_link:
-            await callback.message.answer("Адрес офиса пока не настроен администратором.")
+            await _safe_message_send(callback.message.answer, "Адрес офиса пока не настроен администратором.")
         await _safe_callback_answer(callback)
         return
 
     if choice == "yes":
         state["delivery"] = "yes"
         state["stage"] = "await_delivery_map"
-        await callback.message.answer(
+        await _safe_message_send(callback.message.answer, 
             "Отправьте геолокацию кнопкой ниже или пришлите ссылку Google Maps.",
             reply_markup=rt.delivery_location_keyboard(callback.from_user.id if callback.from_user else None),
         )
@@ -375,7 +389,7 @@ async def on_booking_confirm(callback: CallbackQuery) -> None:
 
     if action == "restart":
         rt.USER_BOOKING_FLOW.pop(callback.from_user.id, None)
-        await callback.message.answer(
+        await _safe_message_send(callback.message.answer, 
             "Выберите категорию скутера:",
             reply_markup=rt.categories_keyboard(callback.from_user.id if callback.from_user else None),
         )
@@ -384,7 +398,7 @@ async def on_booking_confirm(callback: CallbackQuery) -> None:
 
     if action == "rules":
         await rt.send_rules_and_contract(callback.message)
-        await callback.message.answer(
+        await _safe_message_send(callback.message.answer, 
             "Если все окей, нажмите кнопку ниже.",
             reply_markup=rt.booking_rules_ack_keyboard(),
         )
@@ -411,7 +425,7 @@ async def on_booking_confirm(callback: CallbackQuery) -> None:
             booking_id = bot_db.create_booking(booking_data)
             delivered = await rt.notify_admins_about_booking(callback.message, booking_id)
             if delivered > 0:
-                await callback.message.answer(
+                await _safe_message_send(callback.message.answer, 
                     "Отлично. Заявка подтверждена и принята в обработку.\n"
                     f"Номер брони: #{booking_id}\n"
                     "Менеджер скоро свяжется с вами.\n\n"
@@ -421,7 +435,7 @@ async def on_booking_confirm(callback: CallbackQuery) -> None:
                     reply_markup=rt.booking_success_keyboard(),
                 )
             else:
-                await callback.message.answer(
+                await _safe_message_send(callback.message.answer, 
                     "Заявка сохранена, но уведомление администратору не доставлено.\n"
                     f"Номер брони: #{booking_id}\n"
                     "Попросите администратора открыть чат с ботом и нажать /start.\n\n"
@@ -435,7 +449,7 @@ async def on_booking_confirm(callback: CallbackQuery) -> None:
             return
 
         state["stage"] = "await_contact"
-        await callback.message.answer(
+        await _safe_message_send(callback.message.answer, 
             "Отправьте, пожалуйста, ваш контакт для связи:\n"
             "- ссылку на Telegram (@username)\n"
             "или\n"
@@ -451,8 +465,13 @@ async def on_user_nav_menu(callback: CallbackQuery) -> None:
     if not callback.from_user:
         return
     user_id = callback.from_user.id
-    await callback.message.answer("Главное меню", reply_markup=rt.main_reply_keyboard(user_id))
-    await callback.message.answer("Нажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории.")
+    await _safe_message_send(callback.message.answer, "Главное меню", reply_markup=rt.main_reply_keyboard(user_id))
+    await _safe_message_send(callback.message.answer, "Нажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории.")
     await _safe_callback_answer(callback)
+
+
+
+
+
 
 

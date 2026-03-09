@@ -1,5 +1,8 @@
+import asyncio
+
 from aiogram.types import CallbackQuery, Message
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramNetworkError
 
 from bot_app import db as bot_db
 from bot_app import runtime as rt
@@ -29,6 +32,18 @@ async def _safe_callback_answer(
         raise
 
 
+async def _safe_message_answer(message: Message, text: str, **kwargs) -> bool:
+    for attempt in range(3):
+        try:
+            await message.answer(text, **kwargs)
+            return True
+        except TelegramNetworkError:
+            if attempt == 2:
+                return False
+            await asyncio.sleep(0.7 * (attempt + 1))
+    return False
+
+
 def _availability_stats_text() -> str:
     scooters = bot_db.list_scooters()
     total = len(scooters)
@@ -52,7 +67,8 @@ def _booking_actions_markup(booking: dict[str, str | int], status_code: str):
 
 async def _send_booking_list(callback: CallbackQuery, bookings: list[dict[str, str | int]], status_code: str) -> None:
     for booking in bookings:
-        await callback.message.answer(
+        await _safe_message_answer(
+            callback.message,
             rt.admin_booking_text(booking),
             reply_markup=_booking_actions_markup(booking, status_code),
         )
@@ -358,7 +374,8 @@ async def on_admin_booking_action(callback: CallbackQuery) -> None:
     assert callback.data is not None
     parts = callback.data.split(":")
     if len(parts) == 2 and parts[1] == "menu":
-        await callback.message.answer(
+        await _safe_message_answer(
+            callback.message,
             "Меню управления бронями:",
             reply_markup=rt.admin_booking_status_menu_keyboard(),
         )
@@ -382,7 +399,7 @@ async def on_admin_booking_action(callback: CallbackQuery) -> None:
             return
         await _safe_callback_answer(callback)
         bot_db.set_booking_status(booking_id, "active")
-        await callback.message.answer(f"Заявка #{booking_id} подтверждена. Статус: активна.")
+        await _safe_message_answer(callback.message, f"Заявка #{booking_id} подтверждена. Статус: активна.")
         try:
             await callback.message.bot.send_message(
                 chat_id=int(booking["user_id"]),
@@ -402,7 +419,7 @@ async def on_admin_booking_action(callback: CallbackQuery) -> None:
             return
         await _safe_callback_answer(callback)
         bot_db.set_booking_status(booking_id, "finished")
-        await callback.message.answer(f"Заявка #{booking_id} отмечена как отъездила.")
+        await _safe_message_answer(callback.message, f"Заявка #{booking_id} отмечена как отъездила.")
         try:
             await callback.message.bot.send_message(
                 chat_id=int(booking["user_id"]),
@@ -417,7 +434,8 @@ async def on_admin_booking_action(callback: CallbackQuery) -> None:
             "stage": "await_admin_message_text",
             "booking_id": str(booking_id),
         }
-        await callback.message.answer(
+        await _safe_message_answer(
+            callback.message,
             f"Напишите сообщение клиенту по заявке #{booking_id}. "
             "Бот отправит его клиенту от имени менеджера."
         )
@@ -428,10 +446,18 @@ async def on_admin_booking_action(callback: CallbackQuery) -> None:
         if str(booking.get("status")) not in {"pending", "active"}:
             await callback.answer("Заявка уже обработана", show_alert=True)
             return
-        await callback.message.answer(
+        ok = await _safe_message_answer(
+            callback.message,
             f"Выберите причину отклонения заявки #{booking_id}:",
             reply_markup=rt.admin_reject_reasons_keyboard(booking_id),
         )
+        if not ok:
+            await _safe_callback_answer(
+                callback,
+                "Сетевая ошибка. Повторите действие.",
+                show_alert=True,
+            )
+            return
         await callback.answer()
         return
 
