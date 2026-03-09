@@ -1,0 +1,15 @@
+[Unit]
+Description=Telegram Bike Rent Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/tg-bot-rent
+EnvironmentFile=/opt/tg-bot-rent/.env
+ExecStart=/opt/tg-bot-rent/.venv/bin/python /opt/tg-bot-rent/main.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
