@@ -8,14 +8,18 @@ from functools import lru_cache
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher, Router
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     CallbackQuery,
+    ErrorEvent,
     FSInputFile,
     Message,
     ReplyKeyboardRemove,
     User,
 )
+from aiogram.utils.backoff import BackoffConfig
 
 from bot_app import db as bot_db
 from bot_app import keyboards
@@ -59,6 +63,22 @@ USER_MANAGER_FLOW: dict[int, dict[str, str | int]] = {}
 USER_SOS_FLOW: dict[int, dict[str, str | int]] = {}
 
 
+@router.error()
+async def on_router_error(event: ErrorEvent) -> None:
+    exc = event.exception
+    if isinstance(exc, TelegramBadRequest):
+        message = str(exc).lower()
+        if (
+            "query is too old" in message
+            or "query id is invalid" in message
+            or "message is not modified" in message
+        ):
+            return
+    if isinstance(exc, TelegramNetworkError):
+        return
+    raise exc
+
+
 @lru_cache(maxsize=1)
 def _user_handlers():
     return importlib.import_module("bot_app.user_handlers")
@@ -87,6 +107,34 @@ def get_admin_ids() -> set[int]:
 
 def is_admin(user_id: int) -> bool:
     return user_id in get_admin_ids()
+
+
+def _env_int(name: str, default: int, *, min_value: int, max_value: int | None = None) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    if value < min_value:
+        return default
+    if max_value is not None and value > max_value:
+        return max_value
+    return value
+
+
+def _env_float(name: str, default: float, *, min_value: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    if value < min_value:
+        return default
+    return value
 
 
 def make_scooter_title(model: dict[str, str | int]) -> str:
@@ -360,23 +408,27 @@ async def show_main_menu(message: Message) -> None:
     is_admin_user = bool(user_id and is_admin(user_id))
     start_photo_path = os.getenv("START_PHOTO_PATH", "").strip()
     start_photo_url = os.getenv("START_PHOTO_URL", "").strip()
+    start_text = START_TEXT
+    if not is_admin_user:
+        start_text = (
+            f"{START_TEXT}\n\n"
+            "Нажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории."
+        )
 
     if start_photo_path and Path(start_photo_path).is_file():
         await message.answer_photo(
             photo=FSInputFile(start_photo_path),
-            caption=START_TEXT,
+            caption=start_text,
             reply_markup=main_reply_keyboard(user_id),
         )
     elif start_photo_url:
         await message.answer_photo(
             photo=start_photo_url,
-            caption=START_TEXT,
+            caption=start_text,
             reply_markup=main_reply_keyboard(user_id),
         )
     else:
-        await message.answer(START_TEXT, reply_markup=main_reply_keyboard(user_id))
-    if not is_admin_user:
-        await message.answer("Нажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории.")
+        await message.answer(start_text, reply_markup=main_reply_keyboard(user_id))
 
 
 @router.message(CommandStart())
@@ -606,16 +658,51 @@ async def run() -> None:
     if not bot_token:
         raise RuntimeError("BOT_TOKEN is not set. Add it to .env as BOT_TOKEN=...")
 
-    bot = Bot(token=bot_token)
+    session_timeout = _env_float("BOT_HTTP_TIMEOUT", 90.0, min_value=5.0)
+    session_limit = _env_int("BOT_HTTP_LIMIT", 30, min_value=1, max_value=500)
+    polling_timeout = _env_int("BOT_POLLING_TIMEOUT", 25, min_value=1, max_value=60)
+    backoff_min = _env_float("BOT_BACKOFF_MIN", 2.0, min_value=0.1)
+    backoff_max = _env_float("BOT_BACKOFF_MAX", 20.0, min_value=0.2)
+    if backoff_max < backoff_min:
+        backoff_max = backoff_min
+    backoff_factor = _env_float("BOT_BACKOFF_FACTOR", 1.3, min_value=1.0)
+    backoff_jitter = _env_float("BOT_BACKOFF_JITTER", 0.1, min_value=0.0)
+    backoff_config = BackoffConfig(
+        min_delay=backoff_min,
+        max_delay=backoff_max,
+        factor=backoff_factor,
+        jitter=backoff_jitter,
+    )
+
+    session = AiohttpSession(timeout=session_timeout, limit=session_limit)
+    connector_init = getattr(session, "_connector_init", None)
+    if isinstance(connector_init, dict):
+        # Helps Windows avoid stale closed sockets on long-running polling.
+        connector_init["enable_cleanup_closed"] = True
+
+    bot = Bot(
+        token=bot_token,
+        session=session,
+    )
     dp = build_dispatcher()
+    allowed_updates = dp.resolve_used_update_types()
     reminder_task = asyncio.create_task(reminder_loop(bot))
     try:
         while True:
             try:
-                await dp.start_polling(bot)
+                await dp.start_polling(
+                    bot,
+                    polling_timeout=polling_timeout,
+                    backoff_config=backoff_config,
+                    allowed_updates=allowed_updates,
+                    close_bot_session=False,
+                )
                 break
             except asyncio.CancelledError:
                 raise
+            except TelegramNetworkError:
+                # Keep polling alive on unstable internet connection.
+                await asyncio.sleep(2)
             except Exception:
                 # Auto-restart bot polling on transient network/Telegram errors.
                 await asyncio.sleep(5)
@@ -623,6 +710,7 @@ async def run() -> None:
         reminder_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reminder_task
+        await bot.session.close()
 
 
 class BikeRentalBotApplication:

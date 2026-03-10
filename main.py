@@ -7,6 +7,15 @@ SRC_PATH = PROJECT_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
+# More stable networking on older Windows Python runtimes.
+# In Python 3.14+ this API is deprecated and will be removed.
+if (
+    sys.platform.startswith("win")
+    and sys.version_info < (3, 14)
+    and hasattr(asyncio, "WindowsSelectorEventLoopPolicy")
+):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from bot_app.runtime import BikeRentalBotApplication
 
 

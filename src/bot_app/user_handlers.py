@@ -39,14 +39,16 @@ async def on_start(message: Message) -> None:
 
 async def on_menu_button(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else None
-    await message.answer("Главное меню", reply_markup=rt.main_reply_keyboard(user_id))
+    text = "Главное меню"
     if not (user_id and rt.is_admin(user_id)):
-        await message.answer("Нажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории.")
+        text = "Главное меню\nНажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории."
+    await _safe_message_send(message.answer, text, reply_markup=rt.main_reply_keyboard(user_id))
 
 
 async def on_choose_bike_button(message: Message) -> None:
     user_id = message.from_user.id if message.from_user else None
-    await message.answer(
+    await _safe_message_send(
+        message.answer,
         "Выберите категорию байка:",
         reply_markup=rt.categories_keyboard(user_id),
     )
@@ -61,9 +63,9 @@ async def on_my_bookings_button(message: Message) -> None:
         return
     bookings = bot_db.list_user_bookings(message.from_user.id)
     if not bookings:
-        await message.answer("У вас пока нет активных или одобренных заявок.")
+        await _safe_message_send(message.answer, "У вас пока нет активных или одобренных заявок.")
         return
-    await message.answer(rt.user_bookings_text(bookings))
+    await _safe_message_send(message.answer, rt.user_bookings_text(bookings))
 
 
 async def on_contact_manager_button(message: Message) -> None:
@@ -71,13 +73,13 @@ async def on_contact_manager_button(message: Message) -> None:
         return
     active_booking = bot_db.get_latest_active_booking(message.from_user.id)
     if not active_booking:
-        await message.answer("Активной заявки нет. Кнопка доступна только при активной заявке.")
+        await _safe_message_send(message.answer, "Активной заявки нет. Кнопка доступна только при активной заявке.")
         return
     rt.USER_MANAGER_FLOW[message.from_user.id] = {
         "stage": "await_manager_message",
         "booking_id": int(active_booking["id"]),
     }
-    await message.answer("Напишите сообщение менеджеру по вашей заявке.")
+    await _safe_message_send(message.answer, "Напишите сообщение менеджеру по вашей заявке.")
 
 
 async def on_sos_button(message: Message) -> None:
@@ -85,12 +87,13 @@ async def on_sos_button(message: Message) -> None:
         return
     approved = bot_db.get_latest_sos_booking(message.from_user.id)
     if not approved:
-        await message.answer(
+        await _safe_message_send(
+            message.answer,
             "Кнопка SOS доступна только при одобренной заявке.",
             reply_markup=rt.main_reply_keyboard(message.from_user.id),
         )
         return
-    await message.answer("Выберите причину SOS:", reply_markup=rt.sos_keyboard())
+    await _safe_message_send(message.answer, "Выберите причину SOS:", reply_markup=rt.sos_keyboard())
 
 
 async def on_useful_info_button(message: Message) -> None:
@@ -98,12 +101,14 @@ async def on_useful_info_button(message: Message) -> None:
         return
     active_booking = bot_db.get_latest_active_booking(message.from_user.id)
     if not active_booking:
-        await message.answer(
+        await _safe_message_send(
+            message.answer,
             "Раздел доступен после активации брони менеджером.",
             reply_markup=rt.main_reply_keyboard(message.from_user.id),
         )
         return
-    await message.answer(
+    await _safe_message_send(
+        message.answer,
         "Полезная информация:",
         reply_markup=rt.useful_info_keyboard(),
     )
@@ -113,7 +118,7 @@ async def on_categories(message: Message) -> None:
     lines = ["Категории каталога:"]
     for code, title in rt.CATEGORIES.items():
         lines.append(f"- {code}: {title}")
-    await message.answer("\n".join(lines))
+    await _safe_message_send(message.answer, "\n".join(lines))
 
 
 async def on_show_rules(callback: CallbackQuery) -> None:
@@ -465,8 +470,14 @@ async def on_user_nav_menu(callback: CallbackQuery) -> None:
     if not callback.from_user:
         return
     user_id = callback.from_user.id
-    await _safe_message_send(callback.message.answer, "Главное меню", reply_markup=rt.main_reply_keyboard(user_id))
-    await _safe_message_send(callback.message.answer, "Нажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории.")
+    text = "Главное меню"
+    if not rt.is_admin(user_id):
+        text = "Главное меню\nНажмите кнопку `🛵 Выбрать байк`, чтобы открыть категории."
+    await _safe_message_send(
+        callback.message.answer,
+        text,
+        reply_markup=rt.main_reply_keyboard(user_id),
+    )
     await _safe_callback_answer(callback)
 
 

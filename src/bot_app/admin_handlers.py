@@ -44,6 +44,19 @@ async def _safe_message_answer(message: Message, text: str, **kwargs) -> bool:
     return False
 
 
+async def _safe_edit_reply_markup(message: Message, **kwargs) -> None:
+    try:
+        await message.edit_reply_markup(**kwargs)
+    except TelegramBadRequest as exc:
+        msg = str(exc).lower()
+        if "message is not modified" in msg:
+            return
+        raise
+    except TelegramNetworkError:
+        # Optional UI refresh, skip on transient network errors.
+        return
+
+
 def _availability_stats_text() -> str:
     scooters = bot_db.list_scooters()
     total = len(scooters)
@@ -307,7 +320,10 @@ async def on_admin_availability(callback: CallbackQuery) -> None:
             return
         await _safe_callback_answer(callback, f"Доступность обновлена. {_availability_stats_text()}")
         if callback.message:
-            await callback.message.edit_reply_markup(reply_markup=rt.admin_availability_keyboard())
+            await _safe_edit_reply_markup(
+                callback.message,
+                reply_markup=rt.admin_availability_keyboard(),
+            )
         return
 
     await _safe_callback_answer(callback, "Неизвестная команда", show_alert=True)
